@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "azure-devops": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-azure-devops"
+      ],
+      "env": {
+        "AZURE_DEV_OPS_ORGANIZATION": "YOUR_ADO_ORGANIZATION",
+        "AZURE_DEV_OPS_PROJECT": "YOUR_ADO_PROJECT",
+        "AZURE_DEV_OPS_PAT": "YOUR_AZURE_DEVOPS_PAT"
+      }
+    },
+    "playwright-test": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "playwright",
+        "run-test-mcp-server"
+      ]
+    }
+  }
+}

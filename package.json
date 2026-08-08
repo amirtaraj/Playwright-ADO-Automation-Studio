@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "playwright test",
+    "from-md": "node scripts/run-from-md.js"
   },
   "repository": {
     "type": "git",

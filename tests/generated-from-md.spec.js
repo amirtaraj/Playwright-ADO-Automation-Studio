@@ -1,11 +1,11 @@
 const { test } = require('@playwright/test');
 const OrangeHRMLoginPage = require('./pages/orangehrmLoginPage');
 
-test.describe('OrangeHRM login flow', () => {
-  test('logs in with valid credentials and verifies the login button state', async ({ page }) => {
+test.describe('Generated from markdown', () => {
+  test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
     const loginPage = new OrangeHRMLoginPage(page);
 
-    await loginPage.open();
+    await loginPage.open('https://opensource-demo.orangehrmlive.com/web/index.php/auth/login');
     await loginPage.expectLoginFormVisible();
     await loginPage.loginAs('Admin', 'admin123');
 

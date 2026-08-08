@@ -1,8 +1,8 @@
 const { test } = require('@playwright/test');
 const OrangeHRMLoginPage = require('./pages/orangehrmLoginPage');
 
-test.describe('OrangeHRM login flow', () => {
-  test('logs in with valid credentials and verifies the login button state', async ({ page }) => {
+test.describe('ADO / Prompt-based OrangeHRM login test', () => {
+  test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
     const loginPage = new OrangeHRMLoginPage(page);
 
     await loginPage.open();

@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run markdown-to-test workflow",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "from-md",
+        "--",
+        "specs/ado-test-case-template.md"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -2,7 +2,7 @@ const { test } = require('@playwright/test');
 const OrangeHRMLoginPage = require('./pages/orangehrmLoginPage');
 
 test.describe('Generated from markdown', () => {
-  test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
+  test('Verify OrangeHRM dashboard access after login', async ({ page }) => {
     const loginPage = new OrangeHRMLoginPage(page);
 
     await loginPage.open('https://opensource-demo.orangehrmlive.com/web/index.php/auth/login');

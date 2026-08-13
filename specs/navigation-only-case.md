@@ -1,0 +1,2 @@
+- Title: Verify simple navigation
+- URL: https://example.com

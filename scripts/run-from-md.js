@@ -2,13 +2,14 @@
 const path = require('path');
 const { execSync } = require('child_process');
 
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b'; // adjust to your installed model
+
 /**
  * 1. Parse Markdown file for Test Metadata
  */
 function parseMarkdown(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
-
-  // Regex extractors for clean key-value matching
   const getField = (regex, fallback = '') => (content.match(regex)?.[1] || fallback).trim();
 
   return {
@@ -16,72 +17,96 @@ function parseMarkdown(mdPath) {
     url: getField(/^- URL(?: under test)?:\s*(https?:\/\/[^\s]+)/im, 'https://example.com'),
     username: getField(/^- Username:\s*([^\s]+)/im),
     password: getField(/^- Password:\s*([^\s]+)/im),
-    rawMarkdown: content
+    rawMarkdown: content,
   };
 }
 
 /**
- * 2. Generate Playwright Spec File with Copilot Prompting Comments
+ * 2. Generate Playwright Code via Ollama
  */
-function generateSpecFile(testCase, outputFile) {
+async function generateTestCodeWithOllama(testCase) {
+  console.log(`🤖 Prompting local Ollama model (${OLLAMA_MODEL})...`);
+
+  const systemPrompt = `You are an expert Playwright automation engineer.
+Generate clean, valid Playwright test code in CommonJS JavaScript.
+Strict Rules:
+- Return ONLY the executable JavaScript code.
+- Do NOT wrap code in markdown tags (\`\`\`javascript or \`\`\`).
+- Must import { test, expect } from '@playwright/test'.
+- Follow every step defined in the user's markdown specification.`;
+
+  const userPrompt = `Generate a Playwright test specification:
+
+Title: ${testCase.title}
+Target URL: ${testCase.url}
+${testCase.username ? `Credentials: Username: ${testCase.username} | Password: ${testCase.password}` : ''}
+
+Markdown Instructions:
+${testCase.rawMarkdown}`;
+
+  try {
+    const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        system: systemPrompt,
+        prompt: userPrompt,
+        stream: false,
+        options: { temperature: 0.1 }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama returned status ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    let code = data.response.trim();
+
+    // Clean up codeblock markers if generated
+    return code.replace(/^```(?:javascript|js)?\n?/i, '').replace(/\n?```$/i, '');
+  } catch (error) {
+    console.error(`⚠️ Ollama call failed: ${error.message}`);
+    console.log('💡 Falling back to standard template generation...');
+    return fallbackTemplate(testCase);
+  }
+}
+
+function fallbackTemplate(testCase) {
   const escapedTitle = testCase.title.replace(/'/g, "\\'");
-  const hasCredentials = Boolean(testCase.username && testCase.password);
-
-  const specContent = `const { test, expect } = require('@playwright/test');
-
-/**
- * SOURCE MARKDOWN WORKFLOW TEST
- * Title: ${testCase.title}
- * Target URL: ${testCase.url}
- *
- * COPILOT INSTRUCTION: 
- * Implement the step-by-step logic described in the Markdown below.
- */
-
-/*
-${testCase.rawMarkdown}
-*/
+  return `const { test, expect } = require('@playwright/test');
 
 test.describe('Markdown Automation', () => {
   test('${escapedTitle}', async ({ page }) => {
-    // Step 1: Navigate to target URL
     await page.goto('${testCase.url}', { waitUntil: 'domcontentloaded' });
-
-    ${hasCredentials ? `// Step 2: Fill credentials if present
-    const usernameInput = page.locator('input[name="username"], input[placeholder*="Username" i]').first();
-    const passwordInput = page.locator('input[type="password"]').first();
-    const submitBtn = page.locator('button[type="submit"], button:has-text("Login")').first();
-
-    if (await usernameInput.isVisible()) {
-      await usernameInput.fill('${testCase.username}');
-      await passwordInput.fill('${testCase.password}');
-      await submitBtn.click();
-    }` : '// No authentication credentials provided in markdown.'}
-
-    // COPILOT: Add additional test steps below according to the markdown instructions
   });
-});
-`;
+});`;
+}
 
+/**
+ * 3. Save spec file
+ */
+function saveSpecFile(code, outputFile) {
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
-  fs.writeFileSync(outputFile, specContent);
+  fs.writeFileSync(outputFile, code, 'utf8');
   return outputFile;
 }
 
 /**
- * 3. Execute Playwright Test
+ * 4. Execute Playwright Test
  */
 function runTest(specFile) {
   const projectRoot = process.cwd();
   const relativeSpec = path.relative(projectRoot, specFile).replace(/\\/g, '/');
-  
+
   console.log(`\n🚀 Executing Playwright Test: ${relativeSpec}`);
 
   try {
     const output = execSync(`npx playwright test "${relativeSpec}"`, {
       cwd: projectRoot,
       encoding: 'utf8',
-      stdio: 'inherit', // Streams live logs directly to VS Code terminal
+      stdio: 'inherit',
       shell: true,
     });
     return { status: 'PASS', output };
@@ -91,14 +116,14 @@ function runTest(specFile) {
 }
 
 /**
- * Main Workflow Entry Point
+ * Main Entry Point
  */
-function main() {
+async function main() {
   const mdFile = process.argv[2];
 
   if (!mdFile) {
     console.error('❌ Error: Missing markdown file argument.');
-    console.log('Usage: node scripts/run-from-md.js <path-to-markdown-file>');
+    console.log('Usage: node scripts/run-from-md.js specs/<file-name>.md');
     process.exit(1);
   }
 
@@ -111,13 +136,12 @@ function main() {
   console.log(`📄 Reading markdown file: ${mdFile}`);
   const testCase = parseMarkdown(absoluteMdPath);
 
-  // Outputs generated test directly into tests/ folder so VS Code Playwright plugin detects it
+  const specCode = await generateTestCodeWithOllama(testCase);
   const specFile = path.join(process.cwd(), 'tests', 'generated-from-md.spec.js');
-  generateSpecFile(testCase, specFile);
+  saveSpecFile(specCode, specFile);
 
-  console.log(`✅ Generated spec file: tests/generated-from-md.spec.js`);
+  console.log(`✅ Test spec saved to: tests/generated-from-md.spec.js`);
 
-  // Run test
   const result = runTest(specFile);
   console.log(`\n📊 Execution Result: ${result.status}`);
 }

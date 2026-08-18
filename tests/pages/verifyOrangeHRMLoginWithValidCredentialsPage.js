@@ -3,7 +3,12 @@ class VerifyOrangeHRMLoginWithValidCredentialsPage {
     this.page = page;
     this.usernameInput = page.locator('#txtUsername');
     this.passwordInput = page.locator('#txtPassword');
-    this.loginButton = page.locator('#btnLogin');
+    this.submitButton = page.locator('#btnLogin');
+    this.dashboardHeader = page.locator('#branding');
+  }
+
+  async navigateToLoginPage() {
+    await this.page.goto('https://opensource-demo.orangehrmlive.com/');
   }
 
   async enterUsername(username) {
@@ -14,8 +19,12 @@ class VerifyOrangeHRMLoginWithValidCredentialsPage {
     await this.passwordInput.fill(password);
   }
 
-  async clickLoginButton() {
-    await this.loginButton.click();
+  async clickSubmitButton() {
+    await this.submitButton.click();
+  }
+
+  async verifyDashboard() {
+    await expect(this.dashboardHeader).toBeVisible();
   }
 }
 

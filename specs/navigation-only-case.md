@@ -1,12 +1,13 @@
-# Test Case: Orange HRM login
+# Test Case: Verify OrangeHRM login with valid credentials
+
+- Title: Verify OrangeHRM login with valid credentials
+- URL under test: https://opensource-demo.orangehrmlive.com/
+- Username: Admin
+- Password: admin123
 
 ## Test Steps
-
-- Test Case ID: ORG-LOGIN-001
-- Title: Verify OrangeHRM login with valid credentials
-- Source: Prompt / ADO
-- URL: https://opensource-demo.orangehrmlive.com/web/index.php/auth/login
-- Preconditions: Browser is available and the site is reachable.
-- Test Data:
-  - Username: Admin
-  - Password: admin123
+1. Navigate to 'https://opensource-demo.orangehrmlive.com/'.
+2. Fill username with 'Admin'.
+3. Fill password with 'admin123'.
+4. Click submit button.
+5. Assert that URL redirects to dashboard.

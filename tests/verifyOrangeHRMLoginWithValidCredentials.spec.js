@@ -1,13 +1,15 @@
 const { test, expect } = require('@playwright/test');
 const VerifyOrangeHRMLoginWithValidCredentialsPage = require('./pages/verifyOrangeHRMLoginWithValidCredentialsPage.js');
 
+const username = 'Admin';
+const password = 'admin123';
 
 test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
-  const pageObj = new VerifyOrangeHRMLoginWithValidCredentialsPage(page);
+  const loginPage = new VerifyOrangeHRMLoginWithValidCredentialsPage(page);
 
-  await pageObj.enterUsername('Admin');
-  await pageObj.enterPassword('admin123');
-  await pageObj.clickLoginButton();
-
-  await expect(page).toHaveTitle('OrangeHRM');
+  await loginPage.navigateToLoginPage();
+  await loginPage.enterUsername(username);
+  await loginPage.enterPassword(password);
+  await loginPage.clickSubmitButton();
+  await loginPage.verifyDashboard();
 });

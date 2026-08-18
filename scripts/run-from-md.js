@@ -4,81 +4,29 @@ const { spawnSync } = require('child_process');
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder:latest';
+const MAX_AGENT_RETRIES = 3;
 
 /**
- * Helper: Generate clean timestamp string (YYYYMMDD_HHMMSS)
- */
-function getTimestamp() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const yyyy = now.getFullYear();
-  const mm = pad(now.getMonth() + 1);
-  const dd = pad(now.getDate());
-  const hh = pad(now.getHours());
-  const min = pad(now.getMinutes());
-  const ss = pad(now.getSeconds());
-  return `${yyyy}${mm}${dd}_${hh}${min}${ss}`;
-}
-
-/**
- * Helper: Convert title to clean PascalCase and camelCase identifiers
- */
-function sanitizeNames(rawTitle) {
-  const cleanTitle = rawTitle.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
-  const words = cleanTitle.split(/\s+/).filter(Boolean);
-  
-  if (words.length === 0) {
-    words.push('GeneratedTest');
-  }
-
-  const pascalBase = words
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join('');
-    
-  const camelBase = pascalBase.charAt(0).toLowerCase() + pascalBase.slice(1);
-
-  return { pascalBase, camelBase };
-}
-
-/**
- * 1. Parse Markdown file for Test Metadata & Compute Unique File Paths
+ * 1. Helper: Parse Markdown Metadata
  */
 function parseMarkdown(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
   const getField = (regex, fallback = '') => (content.match(regex)?.[1] || fallback).trim();
 
   const title = getField(/^- Title:\s*(.+)$/im, path.basename(mdPath, '.md'));
-  const { pascalBase, camelBase } = sanitizeNames(title);
+  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+  const words = cleanTitle.split(/\s+/).filter(Boolean);
 
-  // Standard non-colliding initial file and class names
-  let pageClassName = `${pascalBase}Page`;
-  let pageFileName = `${camelBase}Page.js`;
-  let specFileName = `${camelBase}.spec.js`;
-
-  const pagesDir = path.join(process.cwd(), 'tests', 'pages');
-  const testsDir = path.join(process.cwd(), 'tests');
-
-  let pagePath = path.join(pagesDir, pageFileName);
-  let specPath = path.join(testsDir, specFileName);
-
-  // If file exists, append timestamp to prevent overwriting
-  if (fs.existsSync(pagePath) || fs.existsSync(specPath)) {
-    const ts = getTimestamp();
-    pageClassName = `${pascalBase}_${ts}Page`;
-    pageFileName = `${camelBase}_${ts}Page.js`;
-    specFileName = `${camelBase}_${ts}.spec.js`;
-
-    pagePath = path.join(pagesDir, pageFileName);
-    specPath = path.join(testsDir, specFileName);
-  }
+  const pascalBase = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('') || 'GeneratedTest';
+  const camelBase = pascalBase.charAt(0).toLowerCase() + pascalBase.slice(1);
 
   return {
     title,
-    pageClassName,
-    pageFileName,
-    specFileName,
-    pagePath,
-    specPath,
+    pageClassName: `${pascalBase}Page`,
+    pageFileName: `${camelBase}Page.js`,
+    specFileName: `${camelBase}.spec.js`,
+    pagePath: path.join(process.cwd(), 'tests', 'pages', `${camelBase}Page.js`),
+    specPath: path.join(process.cwd(), 'tests', `${camelBase}.spec.js`),
     url: getField(/^- URL(?: under test)?:\s*(https?:\/\/[^\s]+)/im, 'https://example.com'),
     username: getField(/^- Username:\s*([^\s]+)/im),
     password: getField(/^- Password:\s*([^\s]+)/im),
@@ -87,101 +35,9 @@ function parseMarkdown(mdPath) {
 }
 
 /**
- * 2. Fallback POM Implementation
+ * 2. Ollama Query Helper
  */
-function fallbackPom(testCase) {
-  const hasCredentials = Boolean(testCase.username && testCase.password);
-
-  const pageObjectCode = `class ${testCase.pageClassName} {
-  constructor(page) {
-    this.page = page;
-    this.usernameInput = page.locator('input[name="username"], input[placeholder*="Username" i]').first();
-    this.passwordInput = page.locator('input[type="password"], input[placeholder*="Password" i]').first();
-    this.submitButton = page.locator('button[type="submit"], button:has-text("Login")').first();
-    this.continueShoppingBtn = page.locator('button.a-button-text:has-text("Continue shopping"), button[alt="Continue shopping"]').first();
-    this.sellLink = page.locator('a[data-csa-c-content-id*="sell"], a.nav-a:has-text("Sell")').first();
-  }
-
-  async goto() {
-    await this.page.goto('${testCase.url}', { waitUntil: 'domcontentloaded' });
-  }
-
-  async login(username, password) {
-    await this.usernameInput.fill(username);
-    await this.passwordInput.fill(password);
-    await this.submitButton.click();
-  }
-
-  async clickContinueShoppingIfPresent() {
-    try {
-      if (await this.continueShoppingBtn.isVisible({ timeout: 3000 })) {
-        await this.continueShoppingBtn.click();
-      }
-    } catch {}
-  }
-
-  async clickSell() {
-    await this.sellLink.click();
-  }
-}
-
-module.exports = { ${testCase.pageClassName} };`;
-
-  const specCode = `const { test, expect } = require('@playwright/test');
-const { ${testCase.pageClassName} } = require('./pages/${testCase.pageFileName}');
-
-test.describe('${testCase.title.replace(/'/g, "\\'")}', () => {
-  test('Execute test steps', async ({ page }) => {
-    const pageObj = new ${testCase.pageClassName}(page);
-    await pageObj.goto();
-    ${hasCredentials ? `await pageObj.login('${testCase.username}', '${testCase.password}');` : ''}
-  });
-});`;
-
-  return { pageObjectCode, specCode };
-}
-
-/**
- * 3. Generate POM via Ollama in JSON format
- */
-async function generatePomWithOllama(testCase) {
-  console.log(`🤖 Prompting Ollama (${OLLAMA_MODEL}) to generate Page Object & Spec...`);
-
-  const systemPrompt = `You are an expert Playwright automation engineer following strict Page Object Model (POM) architecture.
-
-Output ONLY valid JSON with exactly two string keys: "pageObjectCode" and "specCode".
-
-Strict Validation Rules:
-1. "pageObjectCode":
-   - NEVER import or require '@playwright/test' (do not import test or expect).
-   - ONLY export the class named "${testCase.pageClassName}".
-   - Constructor must receive 'page' (constructor(page) { this.page = page; ... }).
-   - Initialize all locators in constructor.
-   - Methods: fine-grained, atomic actions only.
-   - NO assertions (expect) inside page object.
-   - End strictly with: module.exports = { ${testCase.pageClassName} };
-
-2. "specCode":
-   - MUST import test and expect from '@playwright/test'.
-   - MUST import "${testCase.pageClassName}" from './pages/${testCase.pageFileName}'.
-   - Page Object instantiation MUST ONLY happen INSIDE the test callback:
-     test('${testCase.title}', async ({ page }) => {
-       const pageObj = new ${testCase.pageClassName}(page);
-       // actions and assertions
-     });
-   - NEVER instantiate the page object outside a test or beforeEach callback.
-   - NEVER include placeholder comments (no TODO, FIXME, or COPILOT comments).
-
-STRICT JSON ONLY. No markdown code blocks (no \`\`\`json), no extra conversational text.`;
-
-  const userPrompt = `Target URL: ${testCase.url}
-Title: ${testCase.title}
-Page Object Class Name: ${testCase.pageClassName}
-Page Object File Name: ${testCase.pageFileName}
-
-Markdown Requirements:
-${testCase.rawMarkdown}`;
-
+async function askAgent(systemPrompt, userPrompt) {
   try {
     const response = await fetch(`${OLLAMA_HOST}/api/generate`, {
       method: 'POST',
@@ -196,121 +52,179 @@ ${testCase.rawMarkdown}`;
       })
     });
 
-    if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-    }
+    if (!response.ok) throw new Error(`Ollama status ${response.status}`);
 
     const result = await response.json();
-    let rawText = (result.response || '').trim();
-
-    // Strip markdown code fences if present
-    rawText = rawText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
-
-    const parsed = JSON.parse(rawText);
-    const pageObjectCode = parsed.pageObjectCode || parsed.pageObject || parsed.page_object_code;
-    const specCode = parsed.specCode || parsed.spec || parsed.spec_code;
-
-    if (!pageObjectCode || !specCode || pageObjectCode.trim().length === 0) {
-      throw new Error('Incomplete POM code returned from model');
-    }
-
-    return { pageObjectCode, specCode };
+    let rawText = (result.response || '').trim().replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '');
+    return JSON.parse(rawText);
   } catch (error) {
-    console.error(`⚠️ Generation fallback triggered: ${error.message}`);
-    return fallbackPom(testCase);
+    console.error(`⚠️ Agent reasoning error: ${error.message}`);
+    return null;
   }
 }
 
 /**
- * 4. Write Files without Overwriting
+ * 3. Agent Tool: Generate Initial Code
  */
-function savePomFiles(testCase, pomData) {
-  const fallback = fallbackPom(testCase);
-  const pageCode = String(pomData?.pageObjectCode || fallback.pageObjectCode);
-  const specCode = String(pomData?.specCode || fallback.specCode);
+async function generateInitialPom(testCase) {
+  console.log(`🤖 [Agent Decision]: Analyzing Markdown & Generating POM structure using ${OLLAMA_MODEL}...`);
 
-  // Write Page Object
-  fs.mkdirSync(path.dirname(testCase.pagePath), { recursive: true });
-  fs.writeFileSync(testCase.pagePath, pageCode, 'utf8');
-  console.log(`📄 Created Page Object: tests/pages/${testCase.pageFileName}`);
+  const systemPrompt = `You are an autonomous Playwright QA Agent.
+Generate clean CommonJS JavaScript implementing strict Page Object Model (POM).
 
-  // Write Spec
-  fs.mkdirSync(path.dirname(testCase.specPath), { recursive: true });
-  fs.writeFileSync(testCase.specPath, specCode, 'utf8');
-  console.log(`📄 Created Spec: tests/${testCase.specFileName}`);
+Strict Rules:
+1. "pageObjectCode": Class "${testCase.pageClassName}". Constructor(page) initializes all locators. Methods are atomic actions. DO NOT import '@playwright/test'. End with: module.exports = { ${testCase.pageClassName} };
+2. "specCode": Imports test and expect from '@playwright/test'. Imports "${testCase.pageClassName}" from './pages/${testCase.pageFileName}'. Orchestrates actions and performs expect() assertions INSIDE the test callback.
 
-  return testCase.specPath;
+Output JSON ONLY:
+{
+  "pageObjectCode": "string",
+  "specCode": "string"
+}`;
+
+  const userPrompt = `Requirements:\nTitle: ${testCase.title}\nURL: ${testCase.url}\nSpecification:\n${testCase.rawMarkdown}`;
+
+  const res = await askAgent(systemPrompt, userPrompt);
+  if (!res || !res.pageObjectCode || !res.specCode) {
+    throw new Error('Failed to generate initial test code from Ollama');
+  }
+  return res;
 }
 
 /**
- * 5. Run Test
+ * 4. Agent Tool: Self-Heal and Repair on Failure
  */
-function runTest(specFile) {
-  const relativeSpec = path
-    .relative(process.cwd(), specFile)
-    .replace(/\\/g, '/');
+async function healCodeWithAgent(testCase, currentPom, failureError) {
+  console.log(`🔧 [Agent Action]: Self-healing code based on Playwright failure logs...`);
 
-  console.log(`\n🚀 Executing Playwright Test: ${relativeSpec}`);
+  const systemPrompt = `You are an autonomous self-healing Playwright QA Agent.
+The previously generated Playwright test failed during execution.
+Analyze the error stack trace, identify the broken selector, timing issue, or incorrect workflow step, and output the corrected code.
+
+Strict Output JSON:
+{
+  "pageObjectCode": "string",
+  "specCode": "string",
+  "explanation": "short summary of the fix"
+}`;
+
+  const userPrompt = `Test Details:
+Title: ${testCase.title}
+Target URL: ${testCase.url}
+
+Current Page Object Code:
+${currentPom.pageObjectCode}
+
+Current Spec Code:
+${currentPom.specCode}
+
+Playwright Error Output:
+${failureError}
+
+Please diagnose the issue and return the corrected "pageObjectCode" and "specCode".`;
+
+  return await askAgent(systemPrompt, userPrompt);
+}
+
+/**
+ * 5. File System Tool
+ */
+function savePomFiles(testCase, pomData) {
+  fs.mkdirSync(path.dirname(testCase.pagePath), { recursive: true });
+  fs.writeFileSync(testCase.pagePath, pomData.pageObjectCode, 'utf8');
+
+  fs.mkdirSync(path.dirname(testCase.specPath), { recursive: true });
+  fs.writeFileSync(testCase.specPath, pomData.specCode, 'utf8');
+}
+
+/**
+ * 6. Execution Tool
+ */
+function runPlaywrightTest(specFile) {
+  const relativeSpec = path.relative(process.cwd(), specFile).replace(/\\/g, '/');
+  console.log(`\n🚀 [Agent Execution]: Running npx playwright test ${relativeSpec}`);
 
   const isWindows = process.platform === 'win32';
   const command = isWindows ? 'cmd.exe' : 'npx';
-  const args = isWindows
-    ? ['/c', 'npx', 'playwright', 'test', relativeSpec]
-    : ['playwright', 'test', relativeSpec];
+  const args = isWindows ? ['/c', 'npx', 'playwright', 'test', relativeSpec] : ['playwright', 'test', relativeSpec];
 
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
-    stdio: 'inherit',
+    stdio: 'pipe', // Pipe logs so the agent can inspect the output
     shell: false,
     env: process.env,
   });
 
-  if (result.error) {
-    return {
-      status: 'FAIL',
-      error: result.error.message,
-      exitCode: result.status,
-    };
-  }
-
-  if (result.status !== 0) {
-    return {
-      status: 'FAIL',
-      error: `Playwright exited with code ${result.status}`,
-      exitCode: result.status,
-    };
-  }
+  const output = (result.stdout || '') + '\n' + (result.stderr || '');
+  console.log(output);
 
   return {
-    status: 'PASS',
-    exitCode: result.status,
+    passed: result.status === 0,
+    output: output,
   };
 }
 
 /**
- * Main Runner
+ * 7. Autonomous Agent Loop
  */
 async function main() {
   const mdFile = process.argv[2];
   if (!mdFile) {
-    console.error('❌ Error: Missing markdown file argument.');
-    console.log('Usage: node scripts/run-from-md.js specs/<test-name>.md');
+    console.error('❌ Usage: node scripts/run-from-md.js specs/<test-name>.md');
     process.exit(1);
   }
 
   const absoluteMdPath = path.resolve(process.cwd(), mdFile);
   if (!fs.existsSync(absoluteMdPath)) {
-    console.error(`❌ Error: File not found at ${absoluteMdPath}`);
+    console.error(`❌ Spec not found at ${absoluteMdPath}`);
     process.exit(1);
   }
 
   const testCase = parseMarkdown(absoluteMdPath);
-  const pomData = await generatePomWithOllama(testCase);
-  const specFile = savePomFiles(testCase, pomData);
+  console.log(`\n🧠 --- Starting Autonomous Agent for: ${testCase.title} ---`);
 
-  const result = runTest(specFile);
-  console.log(`\n📊 Execution Result: ${result.status}`);
+  // Step 1: Agent creates initial POM
+  let currentPom = await generateInitialPom(testCase);
+  savePomFiles(testCase, currentPom);
+
+  let attempt = 1;
+  let testPassed = false;
+
+  // Step 2: Agent execution & self-healing loop
+  while (attempt <= MAX_AGENT_RETRIES && !testPassed) {
+    console.log(`\n🔄 [Agent Loop]: Attempt ${attempt} of ${MAX_AGENT_RETRIES}`);
+    
+    const execution = runPlaywrightTest(testCase.specPath);
+
+    if (execution.passed) {
+      console.log(`\n🎉 [Agent Verdict]: Test passed successfully on attempt ${attempt}!`);
+      testPassed = true;
+      break;
+    }
+
+    console.log(`\n⚠️ [Agent Observation]: Test failed on attempt ${attempt}.`);
+    
+    if (attempt < MAX_AGENT_RETRIES) {
+      console.log(`🧐 [Agent Reasoning]: Analyzing test logs to fix selectors / steps...`);
+      const healedData = await healCodeWithAgent(testCase, currentPom, execution.output);
+
+      if (healedData && healedData.pageObjectCode && healedData.specCode) {
+        console.log(`💡 [Agent Strategy]: ${healedData.explanation || 'Applied fixes to POM and Spec'}`);
+        currentPom = healedData;
+        savePomFiles(testCase, currentPom);
+      } else {
+        console.log('⚠️ Could not obtain structured fix from agent. Retrying with existing code...');
+      }
+    }
+
+    attempt++;
+  }
+
+  if (!testPassed) {
+    console.error(`\n❌ [Agent Verdict]: Test could not be healed after ${MAX_AGENT_RETRIES} attempts.`);
+    process.exit(1);
+  }
 }
 
 if (require.main === module) {

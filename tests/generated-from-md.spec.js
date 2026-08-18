@@ -1,14 +1,28 @@
 const { test, expect } = require('@playwright/test');
-const { NavigationOnlyCasePage } = require('./pages/navigationOnlyCasePage.js');
+const VerifyOrangeHRMLoginWithValidCredentialsPage = require('./pages/verifyOrangeHRMLoginWithValidCredentialsPage.js');
 
-test.describe('Verify user can navigate to the Sell page on Amazon', () => {
-  test('Verify user can navigate to the Sell page', async ({ page }) => {
-    const pageObj = new NavigationOnlyCasePage(page);
-    
-    await pageObj.goto();
-    await pageObj.clickContinueShoppingIfPresent();
-    await pageObj.clickSell();
+const USERNAME = process.env.ORANGEHRM_USERNAME || 'Admin';
+const PASSWORD = process.env.ORANGEHRM_PASSWORD || 'admin123';
 
-    await expect(page).toHaveURL(/sell/i);
+test.describe('Verify OrangeHRM login with valid credentials', () => {
+  let page;
+  let verifyOrangeHRMLoginWithValidCredentialsPage;
+
+  test.beforeEach(async ({ browser }) => {
+    page = await browser.newPage();
+    verifyOrangeHRMLoginWithValidCredentialsPage = new VerifyOrangeHRMLoginWithValidCredentialsPage(page);
+  });
+
+  test.afterEach(async () => {
+    await page.close();
+  });
+
+  test('should successfully log in with valid credentials', async () => {
+    await verifyOrangeHRMLoginWithValidCredentialsPage.goto();
+    await verifyOrangeHRMLoginWithValidCredentialsPage.login(USERNAME, PASSWORD);
+
+    // Add assertions here based on the expected results
+    // For example:
+    // await expect(page.locator('#dashboard')).toBeVisible();
   });
 });

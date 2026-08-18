@@ -1,28 +1,13 @@
 const { test, expect } = require('@playwright/test');
-const VerifyOrangeHRMLoginWithValidCredentialsPage = require('./pages/verifyOrangeHRMLoginWithValidCredentialsPage.js');
+const { VerifyOrangeHRMLoginWithValidCredentialsPage } = require('./pages/verifyOrangeHRMLoginWithValidCredentialsPage.js');
 
-const USERNAME = process.env.ORANGEHRM_USERNAME || 'Admin';
-const PASSWORD = process.env.ORANGEHRM_PASSWORD || 'admin123';
 
-test.describe('Verify OrangeHRM login with valid credentials', () => {
-  let page;
-  let verifyOrangeHRMLoginWithValidCredentialsPage;
+test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
+  const pageObj = new VerifyOrangeHRMLoginWithValidCredentialsPage(page);
 
-  test.beforeEach(async ({ browser }) => {
-    page = await browser.newPage();
-    verifyOrangeHRMLoginWithValidCredentialsPage = new VerifyOrangeHRMLoginWithValidCredentialsPage(page);
-  });
+  await pageObj.usernameInput.fill('Admin');
+  await pageObj.passwordInput.fill('admin123');
+  await pageObj.loginButton.click();
 
-  test.afterEach(async () => {
-    await page.close();
-  });
-
-  test('should successfully log in with valid credentials', async () => {
-    await verifyOrangeHRMLoginWithValidCredentialsPage.goto();
-    await verifyOrangeHRMLoginWithValidCredentialsPage.login(USERNAME, PASSWORD);
-
-    // Add assertions here based on the expected results
-    // For example:
-    // await expect(page.locator('#dashboard')).toBeVisible();
-  });
+  // Add assertions here if needed
 });

@@ -1,4 +1,7 @@
-Specs
+Playwright ADO Automation Studio
+
+This project demonstrates a simple Playwright workflow for converting Azure DevOps (ADO) test cases or prompt-based requirements into executable browser tests using a local Ollama LLM.
+
 This folder contains reusable test-case templates and AI-powered test-generation assets for the Playwright Automation Studio.
 The framework includes an Autonomous Test Automation Agent that converts Markdown-based test cases into executable Playwright Page Object Model (POM) tests using a local Ollama LLM and can automatically self-heal failed tests.
 Core Architecture Overview

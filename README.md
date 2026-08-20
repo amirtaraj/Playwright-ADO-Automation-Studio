@@ -58,8 +58,6 @@ npx playwright install
 
 ### 3. Execute the Markdown workflow
 
-> **Mandatory command**
-
 ```bash
 OLLAMA_MODEL="qwen2.5-coder:latest" node scripts/run-from-md.js specs/navigation-only-case.md
 ```

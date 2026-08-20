@@ -1,30 +1,21 @@
 class VerifyOrangeHRMLoginWithValidCredentialsPage {
   constructor(page) {
     this.page = page;
-    this.usernameInput = page.locator('#txtUsername');
-    this.passwordInput = page.locator('#txtPassword');
-    this.submitButton = page.locator('#btnLogin');
-    this.dashboardHeader = page.locator('#branding');
+    this.usernameInput = page.locator('input[name="username"], input[placeholder*="Username" i]').first();
+    this.passwordInput = page.locator('input[name="password"], input[type="password"]').first();
+    this.submitButton = page.locator('button[type="submit"], button:has-text("Login")').first();
   }
 
-  async navigateToLoginPage() {
-    await this.page.goto('https://opensource-demo.orangehrmlive.com/');
+  async goto() {
+    await this.page.goto('https://opensource-demo.orangehrmlive.com/', { waitUntil: 'domcontentloaded' });
+    await this.usernameInput.waitFor({ state: 'visible', timeout: 15000 });
   }
 
-  async enterUsername(username) {
+  async login(username, password) {
+    await this.usernameInput.waitFor({ state: 'visible', timeout: 10000 });
     await this.usernameInput.fill(username);
-  }
-
-  async enterPassword(password) {
     await this.passwordInput.fill(password);
-  }
-
-  async clickSubmitButton() {
     await this.submitButton.click();
-  }
-
-  async verifyDashboard() {
-    await expect(this.dashboardHeader).toBeVisible();
   }
 }
 

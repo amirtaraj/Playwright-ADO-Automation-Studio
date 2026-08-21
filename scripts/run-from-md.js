@@ -8,26 +8,29 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder:latest';
 const MAX_AGENT_RETRIES = 3;
 
 /**
- * 1. Helper: Parse Markdown Metadata
+ * 1. Helper: Parse Markdown Metadata based strictly on MD File Name
  */
 function parseMarkdown(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
   const getField = (regex, fallback = '') => (content.match(regex)?.[1] || fallback).trim();
 
-  const title = getField(/^- Title:\s*(.+)$/im, path.basename(mdPath, '.md'));
-  const cleanTitle = title.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
-  const words = cleanTitle.split(/\s+/).filter(Boolean);
+  const baseFileName = path.basename(mdPath, path.extname(mdPath));
+  const title = getField(/^- Title:\s*(.+)$/im, baseFileName);
 
-  const pascalBase = words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('') || 'GeneratedTest';
-  const camelBase = pascalBase.charAt(0).toLowerCase() + pascalBase.slice(1);
+  const cleanWords = baseFileName.replace(/[^a-zA-Z0-9\s_-]/g, ' ').split(/[\s_-]+/).filter(Boolean);
+  const camelBase = cleanWords.map((w, i) => i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('') || 'generatedTest';
+  const pascalBase = cleanWords.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('') || 'GeneratedTest';
 
   return {
     title,
+    baseFileName,
+    pascalBase,
+    camelBase,
     pageClassName: `${pascalBase}Page`,
     pageFileName: `${camelBase}Page.js`,
-    specFileName: `${camelBase}.spec.js`,
+    specFileName: `${baseFileName}.spec.js`,
     pagePath: path.join(process.cwd(), 'tests', 'pages', `${camelBase}Page.js`),
-    specPath: path.join(process.cwd(), 'tests', `${camelBase}.spec.js`),
+    specPath: path.join(process.cwd(), 'tests', `${baseFileName}.spec.js`),
     url: getField(/^- URL(?: under test)?:\s*(https?:\/\/[^\s]+)/im, 'https://example.com'),
     username: getField(/^- Username:\s*([^\s]+)/im),
     password: getField(/^- Password:\s*([^\s]+)/im),
@@ -36,7 +39,17 @@ function parseMarkdown(mdPath) {
 }
 
 /**
- * 2. DOM Inspector Tool: Fetches sanitized HTML/DOM tree from live page
+ * 2. Helper: Clean Allure Results to ensure only the latest run is captured
+ */
+function cleanAllureResults() {
+  const resultsDir = path.join(process.cwd(), 'allure-results');
+  if (fs.existsSync(resultsDir)) {
+    fs.rmSync(resultsDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 3. DOM Inspector Tool
  */
 async function fetchCleanDOM(url) {
   console.log(`🌐 [DOM Inspector]: Inspecting live DOM structure at ${url}...`);
@@ -50,25 +63,21 @@ async function fetchCleanDOM(url) {
       await page.waitForLoadState('domcontentloaded');
     });
 
-    // Wait 2 seconds for client-side frameworks (Vue/React/Aura) to mount
     await page.waitForTimeout(2000);
 
-    // Extract relevant interactive elements (forms, inputs, buttons, links, labels)
     const pageData = await page.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('input, button, select, textarea, a, form, label, [role="button"], [role="link"], [role="combobox"]'));
-      return elements.map(el => {
-        return {
-          tag: el.tagName.toLowerCase(),
-          type: el.getAttribute('type') || '',
-          name: el.getAttribute('name') || '',
-          id: el.getAttribute('id') || '',
-          placeholder: el.getAttribute('placeholder') || '',
-          role: el.getAttribute('role') || '',
-          ariaLabel: el.getAttribute('aria-label') || '',
-          text: (el.innerText || el.textContent || '').trim().slice(0, 50),
-          classes: el.className || ''
-        };
-      });
+      return elements.map(el => ({
+        tag: el.tagName.toLowerCase(),
+        type: el.getAttribute('type') || '',
+        name: el.getAttribute('name') || '',
+        id: el.getAttribute('id') || '',
+        placeholder: el.getAttribute('placeholder') || '',
+        role: el.getAttribute('role') || '',
+        ariaLabel: el.getAttribute('aria-label') || '',
+        text: (el.innerText || el.textContent || '').trim().slice(0, 50),
+        classes: el.className || ''
+      }));
     });
 
     await browser.close();
@@ -81,7 +90,7 @@ async function fetchCleanDOM(url) {
 }
 
 /**
- * 3. Ollama Query Helper
+ * 4. Ollama Query Helper
  */
 async function askAgent(systemPrompt, userPrompt) {
   try {
@@ -110,10 +119,10 @@ async function askAgent(systemPrompt, userPrompt) {
 }
 
 /**
- * 4. Agent Tool: Generate Initial Code with DOM Context
+ * 5. Code Generation Tool
  */
-async function generateInitialPom(testCase, domContext) {
-  console.log(`🤖 [Agent Decision]: Synthesizing DOM & Generating POM structure using ${OLLAMA_MODEL}...`);
+async function generatePomWithAgent(testCase, domContext) {
+  console.log(`🤖 [Agent Decision]: Synthesizing POM architecture using ${OLLAMA_MODEL}...`);
 
   const systemPrompt = `You are an expert Playwright automation engineer following strict Page Object Model (POM) architecture.
 
@@ -122,10 +131,10 @@ Output ONLY a JSON object with two string keys: "pageObjectCode" and "specCode".
 Strict Rules:
 1. "pageObjectCode":
    - Class named "${testCase.pageClassName}".
-   - Constructor(page) initializes locators using best practices (page.locator(), page.getByRole(), page.getByPlaceholder()).
-   - Explicit Waits: Use "await this.element.waitFor({ state: 'visible', timeout: 15000 })" before interactions if elements render dynamically.
-   - For goto(), use "await this.page.goto('${testCase.url}', { waitUntil: 'networkidle' });".
-   - NO assertions inside the Page Object.
+   - Constructor(page) initializes locators (page.locator(), page.getByRole(), page.getByPlaceholder()).
+   - Explicit Waits: Use "await this.element.waitFor({ state: 'visible', timeout: 15000 })" before actions.
+   - For goto(), use "await this.page.goto('${testCase.url}', { waitUntil: 'domcontentloaded' });".
+   - NO assertions inside Page Object.
    - NEVER import '@playwright/test' in the Page Object.
    - MUST end with: module.exports = { ${testCase.pageClassName} };
 
@@ -133,7 +142,7 @@ Strict Rules:
    - Imports test and expect from '@playwright/test'.
    - Imports "${testCase.pageClassName}" from './pages/${testCase.pageFileName}'.
    - Executes workflow inside test('${testCase.title}', async ({ page }) => { ... }).
-   - Performs all assertions (expect) inside the test file.
+   - Performs all assertions (expect) inside the spec test.
 
 STRICT JSON ONLY. No markdown wrapper ticks, no extra conversation.`;
 
@@ -155,16 +164,21 @@ ${domContext}`;
 }
 
 /**
- * 5. Agent Tool: Self-Heal and Repair on Failure
+ * 6. Self-Healing Tool
  */
 async function healCodeWithAgent(testCase, currentPom, failureError, domContext) {
-  console.log(`🔧 [Agent Action]: Diagnosing failures and self-healing code...`);
+  console.log(`🔧 [Agent Action]: Diagnosing failures & overwriting code for next attempt...`);
 
   const systemPrompt = `You are an autonomous self-healing Playwright QA Agent.
-The test failed during execution. Inspect the live DOM elements, error log, and current code to provide corrected Page Object and Spec implementations.
-Ensure explicit element visibility waits and fallback locators are added.
+The test failed during execution. Inspect the live DOM elements, error log, and current code.
+Fix the broken locators, timing waits, or sequences.
 
-Strict Output JSON format:
+Strict Requirements:
+- Page class name MUST remain "${testCase.pageClassName}".
+- Spec file MUST import "${testCase.pageClassName}" from './pages/${testCase.pageFileName}'.
+- End page object with: module.exports = { ${testCase.pageClassName} };
+
+Strict Output JSON:
 {
   "pageObjectCode": "string",
   "specCode": "string",
@@ -174,25 +188,27 @@ Strict Output JSON format:
   const userPrompt = `Target URL: ${testCase.url}
 Title: ${testCase.title}
 
-Current Page Object Code:
+Current Page Object:
 ${currentPom.pageObjectCode}
 
-Current Spec Code:
+Current Spec:
 ${currentPom.specCode}
 
 Execution Error Stack:
 ${failureError}
 
-Live DOM Elements on Page:
-${domContext}
+Live DOM Elements:
+${domContext}`;
 
-Fix the locators, timing waits, or action sequences and return valid JSON.`;
-
-  return await askAgent(systemPrompt, userPrompt);
+  const healed = await askAgent(systemPrompt, userPrompt);
+  if (!healed || !healed.pageObjectCode || !healed.specCode) {
+    return fallbackPom(testCase);
+  }
+  return healed;
 }
 
 /**
- * 6. Resilient Fallback Template
+ * 7. Fallback Template
  */
 function fallbackPom(testCase) {
   const pageObjectCode = `class ${testCase.pageClassName} {
@@ -222,7 +238,7 @@ module.exports = { ${testCase.pageClassName} };`;
 const { ${testCase.pageClassName} } = require('./pages/${testCase.pageFileName}');
 
 test.describe('${testCase.title.replace(/'/g, "\\'")}', () => {
-  test('Verify OrangeHRM login with valid credentials', async ({ page }) => {
+  test('${testCase.title.replace(/'/g, "\\'")}', async ({ page }) => {
     const pageObj = new ${testCase.pageClassName}(page);
     await pageObj.goto();
     await pageObj.login('${testCase.username || 'Admin'}', '${testCase.password || 'admin123'}');
@@ -230,11 +246,11 @@ test.describe('${testCase.title.replace(/'/g, "\\'")}', () => {
   });
 });`;
 
-  return { pageObjectCode, specCode };
+  return { pageObjectCode, specCode, explanation: 'Applied resilient fallback POM template' };
 }
 
 /**
- * 7. File System Saver
+ * 8. File System Saver (Overwrites in-place)
  */
 function savePomFiles(testCase, pomData) {
   fs.mkdirSync(path.dirname(testCase.pagePath), { recursive: true });
@@ -245,22 +261,40 @@ function savePomFiles(testCase, pomData) {
 }
 
 /**
- * 8. Execution Tool
+ * 9. Agent Log Recorder
+ */
+function recordAgentLog(testCase, logHistory) {
+  const logDir = path.join(process.cwd(), 'agent-logs');
+  fs.mkdirSync(logDir, { recursive: true });
+
+  const logFilePath = path.join(logDir, `${testCase.baseFileName}-agent-history.json`);
+  fs.writeFileSync(logFilePath, JSON.stringify(logHistory, null, 2), 'utf8');
+
+  console.log(`📁 [Agent Logs]: Execution & healing steps archived to ${logFilePath}`);
+}
+
+/**
+ * 10. Test Execution (Cleans previous allure-results before each attempt)
  */
 function runPlaywrightTest(specFile) {
+  // Purge previous allure results so only the current attempt exists in the report
+  cleanAllureResults();
+
   const relativeSpec = path.relative(process.cwd(), specFile).replace(/\\/g, '/');
   console.log(`\n🚀 [Agent Execution]: Running npx playwright test ${relativeSpec}`);
 
   const isWindows = process.platform === 'win32';
   const command = isWindows ? 'cmd.exe' : 'npx';
-  const args = isWindows ? ['/c', 'npx', 'playwright', 'test', relativeSpec] : ['playwright', 'test', relativeSpec];
+  const args = isWindows
+    ? ['/c', 'npx', 'playwright', 'test', relativeSpec, '--reporter=list,allure-playwright,html']
+    : ['playwright', 'test', relativeSpec, '--reporter=list,allure-playwright,html'];
 
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
     stdio: 'pipe',
     shell: false,
-    env: process.env,
+    env: { ...process.env, PLAYWRIGHT_SCREENSHOT: 'on' },
   });
 
   const output = (result.stdout || '') + '\n' + (result.stderr || '');
@@ -273,7 +307,31 @@ function runPlaywrightTest(specFile) {
 }
 
 /**
- * 9. Autonomous Agent Loop
+ * 11. Open Report Utility (Generates & opens report containing only the last attempt)
+ */
+function openReport() {
+  console.log(`\n📊 [Reporting]: Preparing test execution report for final attempt...`);
+  const isWindows = process.platform === 'win32';
+
+  if (fs.existsSync(path.join(process.cwd(), 'allure-results'))) {
+    console.log(`✨ Generating & Opening Allure Report...`);
+    const allureCmd = isWindows ? 'cmd.exe' : 'npx';
+    const allureArgs = isWindows
+      ? ['/c', 'npx', 'allure', 'generate', 'allure-results', '--clean', '-o', 'allure-report', '&&', 'npx', 'allure', 'open', 'allure-report']
+      : ['allure', 'generate', 'allure-results', '--clean', '-o', 'allure-report', '&&', 'npx', 'allure', 'open', 'allure-report'];
+
+    const allureRun = spawnSync(allureCmd, allureArgs, { stdio: 'inherit', shell: true });
+    if (allureRun.status === 0) return;
+  }
+
+  console.log(`🌐 Opening Playwright HTML Report...`);
+  const cmd = isWindows ? 'cmd.exe' : 'npx';
+  const args = isWindows ? ['/c', 'npx', 'playwright', 'show-report'] : ['playwright', 'show-report'];
+  spawnSync(cmd, args, { stdio: 'inherit', shell: false });
+}
+
+/**
+ * 12. Main Agent Orchestrator Loop
  */
 async function main() {
   const mdFile = process.argv[2];
@@ -291,47 +349,64 @@ async function main() {
   const testCase = parseMarkdown(absoluteMdPath);
   console.log(`\n🧠 --- Starting Autonomous Agent for: ${testCase.title} ---`);
 
-  // Step 1: Pre-flight DOM inspection to anchor Ollama to real selectors
+  const agentHistory = {
+    testName: testCase.title,
+    specFile: mdFile,
+    startTime: new Date().toISOString(),
+    iterations: []
+  };
+
+  // Step 1: Live DOM Inspection
   const domContext = await fetchCleanDOM(testCase.url);
 
-  // Step 2: Agent creates initial POM
-  let currentPom = await generateInitialPom(testCase, domContext);
+  // Step 2: Initial POM Generation and Initial Save
+  let currentPom = await generatePomWithAgent(testCase, domContext);
   savePomFiles(testCase, currentPom);
 
   let attempt = 1;
   let testPassed = false;
 
-  // Step 3: Agent execution & self-healing loop
+  // Step 3: Execution & Self-Healing Loop
   while (attempt <= MAX_AGENT_RETRIES && !testPassed) {
     console.log(`\n🔄 [Agent Loop]: Attempt ${attempt} of ${MAX_AGENT_RETRIES}`);
 
     const execution = runPlaywrightTest(testCase.specPath);
 
+    agentHistory.iterations.push({
+      attempt,
+      specFile: testCase.specFileName,
+      pageFile: testCase.pageFileName,
+      passed: execution.passed,
+      strategy: attempt === 1 ? 'Initial POM Generation' : currentPom.explanation || 'Self-healed repair',
+      errorLog: execution.passed ? null : execution.output.slice(-800)
+    });
+
     if (execution.passed) {
       console.log(`\n🎉 [Agent Verdict]: Test passed successfully on attempt ${attempt}!`);
       testPassed = true;
+      savePomFiles(testCase, currentPom);
       break;
     }
 
     console.log(`\n⚠️ [Agent Observation]: Test failed on attempt ${attempt}.`);
 
     if (attempt < MAX_AGENT_RETRIES) {
-      console.log(`🧐 [Agent Reasoning]: Analyzing failure logs with DOM context...`);
-      const healedData = await healCodeWithAgent(testCase, currentPom, execution.output, domContext);
+      console.log(`🧐 [Agent Reasoning]: Analyzing failure and overwriting ${testCase.specFileName}...`);
 
-      if (healedData && healedData.pageObjectCode && healedData.specCode) {
-        console.log(`💡 [Agent Strategy]: ${healedData.explanation || 'Applied fixes to POM and Spec'}`);
-        currentPom = healedData;
-        savePomFiles(testCase, currentPom);
-      } else {
-        console.log('⚠️ Could not obtain structured fix from agent. Retrying with fallback...');
-        currentPom = fallbackPom(testCase);
-        savePomFiles(testCase, currentPom);
-      }
+      const healedData = await healCodeWithAgent(testCase, currentPom, execution.output, domContext);
+      currentPom = healedData;
+      savePomFiles(testCase, currentPom);
     }
 
     attempt++;
   }
+
+  agentHistory.endTime = new Date().toISOString();
+  agentHistory.finalStatus = testPassed ? 'PASSED' : 'FAILED';
+  recordAgentLog(testCase, agentHistory);
+
+  // Step 4: Open Report containing ONLY the last run
+  openReport();
 
   if (!testPassed) {
     console.error(`\n❌ [Agent Verdict]: Test could not be healed after ${MAX_AGENT_RETRIES} attempts.`);
